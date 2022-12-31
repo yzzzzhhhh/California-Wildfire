@@ -1,0 +1,1175 @@
+---
+title: "Wildfire risk prediction in California"
+author: "Troy(Zhonghua) Yang, Yuewen Dai"
+date: "2022-12-01"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+    toc_float: yes
+---
+
+# 1. Introduction
+
+![](C:/UPENN%20CLASS/MUSA%205080/assginments/final%20project%20wildfire/wildfire/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20221216162921.jpg)
+
+By this time of 2022, there are 7,543 incidents of wildfire happened in California, which has burned about 362,476 acres of lands, caused 9 fatalities and destroyed 876 structures. Both the property damages and the physical and psychological damages done to people are enormous, and it also have long-term impacts on air quality, water resources, and ecosystems. Many losses cannot be described by cold data.
+
+Considering the great damages of wildfires and their more frequent occurrence due to climate change, the government has taken many preventive measures to avoid wildfires. For example, strengthen the supervision of high fire-prone areas to prevent human-caused fires, like campfires; investing funds to encourage residents to dispose of weeds and shrubs; install additional fire facilities; educating public about wildfire prevention, etc. However, given any preventive measure requires significant government funding, and the resources are limited, the government wants to be able to invent every dollar precisely to where it is needed to control spending. Therefore a more accurate means of predicting where wildfires will occur is needed.
+
+Our FireShield App has developed a machine learning algorithm that can precisely predict the probability of a wildfire occurring in each area. Although we only present results for Northeastern California, our model is highly applicable and can be extended to the entire state of California and even the entire United States. If the wildfire damages have been reduced by preventive measures, and costs are lowered, then our model can be proved to be successful.
+
+In the following sections, we will describe the data we collected, the methods we used to build the model and improve its accuracy, the cost and benefit analysis, and the usage of our app. You can check the video on YouTube here: [The FireShield Intro](https://youtu.be/lXJcQxtGwn8).
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE,warning=FALSE, include=FALSE}
+# LIBRARIES
+#install.packages("yardstick")
+library(yardstick)
+library(mapview)
+library(rasterVis)
+library(exactextractr)
+library(raster)
+library(rjson)
+library(tidycensus)
+library(tidyverse)
+library(sf)
+library(spdep)
+library(caret)
+library(ckanr)
+library(FNN)
+library(grid)
+library(gridExtra)
+library(ggcorrplot)
+library(jtools)  
+library(viridis)
+library(kableExtra)
+library(rlist)
+library(dplyr)
+library(osmdata)
+library(geosphere)
+library(fastDummies)
+library(FNN)
+library(viridis)
+library(stargazer)
+library(pscl)
+library(plotROC)
+library(RANN)
+library(riem)
+library(pROC)
+library(scales)
+library(knitr)
+options(scipen=999)
+options(tigris_class = "sf")
+
+# THEMES AND FUNCTIONS
+mapTheme <- function(base_size = 12) {
+  theme(
+    text = element_text( color = "black"),
+    plot.title = element_text(size = 14,colour = "black"),
+    plot.subtitle=element_text(face="italic"),
+    plot.caption=element_text(hjust=0),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "black", fill=NA, size=2)
+  )
+}
+
+plotTheme <- function(base_size = 12) {
+  theme(
+    text = element_text( color = "black"),
+    plot.title = element_text(size = 14,colour = "black"),
+    plot.subtitle = element_text(face="italic"),
+    plot.caption = element_text(hjust=0),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    panel.grid.major = element_line("grey80", size = 0.1),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "black", fill=NA, size=2),
+    strip.background = element_rect(fill = "grey80", color = "white"),
+    strip.text = element_text(size=12),
+    axis.title = element_text(size=12),
+    axis.text = element_text(size=10),
+    plot.background = element_blank(),
+    legend.background = element_blank(),
+    legend.title = element_text(colour = "black", face = "italic"),
+    legend.text = element_text(colour = "black", face = "italic"),
+    strip.text.x = element_text(size = 14)
+  )
+}
+
+# PALETTE
+palette2 <- c("#e6ccb2","#80b918")
+
+```
+
+# 2. Collect and Explore Data
+
+In this section, we will focus on describing the data we collected to train the model and their potential associations with wildfires.
+
+## 2.1 Data Collection
+
+We collected three types of data from Calfire's opendata website: analysis geometry boundaries, fire perimeter, and relevant feature data which might have correlation with occurrence of fires.
+
+### 2.1.1 Map of California and The Distribution of Wildfire
+
+We acquired the Wildfire Perimeter data of 2019-2021 from GIS Hub. It is the independent variable of our regression model, we use it to predict whether the area is burned or not burned for the next year. Our study does not focus on the re-burn probability of burned areas, and only considers the possibility of burning due to the area's characteristics independently, so we did not remove the burned areas.
+
+Considering that if the range is too large the operation will be very slow, so here, we choose two counties in northeast California, Butte and Modoc Counties, as our main study region, which both have been recorded multiple wildfires for recent 10 years.
+
+**Butte:** According to the U.S. Census Bureau, the county has a total area of 1,677 square miles (4,340 km2), of which 41 square miles (110 km2) (2.4%) are covered by water.The county is drained by the Feather River and Butte Creek. Part of the county's western border is formed by the Sacramento River. The county lies along the western slope of the Sierra Nevada, the steep slopes making it prime territory for the siting of hydroelectric power plants. About a half dozen of these plants are located in the county, one of which, serves the Oroville Dam, which became severely stressed by overflow water in 2017, and which remains a concern today.*(The introduction of the counties are from census government website)*
+
+**Modoc**: According to the U.S. Census Bureau, the county has a total area of 4,203 square miles (10,890 km2), of which 3,918 square miles (10,150 km2) is land and 286 square miles (740 km2) (6.8%) is water.There are 2.25 persons per square mile, making this one of the most sparsely populated counties in California. It is also (almost) the only rectangular county in California; there is a slight deviation around the Tule Lake National Wildlife Refuge.The county is very diverse geographically. The northwestern edge of the county is dominated by the Medicine Lake Highlands, the largest shield volcano on the U.S. West Coast. The Lava Beds National Monument lies partly within the northwest corner of the county. Also along the western edge of the county is the massive Glass Mountain lava flow. The southwestern corner of the county is a unique ecosystem of isolated hardwoods (oaks) and volcanic mountains with intermountain river valleys. *(The introduction of the counties are from census government website)*
+
+```{r message=FALSE,warning=FALSE,echo=TRUE,results='hide'}
+
+## the whole map of california
+cal_map <- st_read("data/CAL_FIRE_Administrative_Units.geojson")%>%
+  st_transform('EPSG:2225') 
+
+## fire data of the overview state
+fire <- st_read("data/California_Fire_Perimeters_(all).geojson")%>%
+  st_transform('EPSG:2225')
+
+## pick up two typical counties
+northcal<-cal_map%>%
+  dplyr::filter(UNIT == "Butte Unit"|UNIT == "Lassen-Modoc Unit")
+
+
+fire_perimeter <- fire %>%
+  dplyr::select(YEAR_, FIRE_NAME, ALARM_DATE,CONT_DATE,geometry) %>%
+  rename(year = YEAR_) %>%
+  mutate(year = as.numeric(year)) %>%
+  dplyr::filter(year == 2019 | year == 2020 | year == 2021)
+```
+
+```{r message=FALSE,warning=FALSE}
+
+ggplot() +
+  geom_sf(data=cal_map, fill="#E6E6FA")+ 
+  geom_sf(data = fire_perimeter, fill="#EE6A50",color="transparent")+
+  labs(title="California Wildfires",
+       subtitle="Years 2019-2021")+
+  mapTheme()
+
+```
+
+```{r message=FALSE,warning=FALSE}
+
+# Filter Northern California fire
+  
+North_fire <- st_join(fire_perimeter, northcal, join = st_intersects,left = FALSE)
+
+ggplot() +
+  geom_sf(data=northcal, fill="#E6E6FA")+ 
+  geom_sf(data = North_fire, fill="#EE6A50",color="transparent")+
+  labs(title="Nouth Region (Butte and Lassen-Modoc) of California Wildfire",
+       subtitle="Years 2019-2021")+
+  mapTheme()
+
+```
+
+### 2.1.2 Create Fishnet
+
+Considering that the fire risk is not a phenomenon that varies across administrative units, but one varying smoothly across landscape, it's more suitable to build grid cells to show the hotspots of these fires, which called fishnet. The fishnet cells are created with each cell has an area of 1.5 square miles.
+
+```{r message=FALSE,warning=FALSE}
+## using {sf} to create the grid
+## Note the `.[cal_map] %>% ` line. This is needed to clip the grid to our area
+fishnet <- 
+  st_make_grid(northcal,
+               cellsize = 8511, 
+               square = FALSE) %>%
+  .[northcal] %>%            # <- MDH Added
+  st_sf() %>%
+  mutate(uniqueID = rownames(.))
+fishnet$cellsize <- as.numeric(st_area(fishnet$geometry))
+
+ netBorder <- st_union(fishnet) %>% st_as_sf()
+
+ggplot() +
+  geom_sf(data = fishnet, fill = "black", color = "white", stroke = 0.1) +
+  labs(title = "Fishnet, 1.5 sq.mi. area per cell",
+       subtitle = "Nouth Region (Butte and Lassen-Modoc) of California, CA Fire District") +
+  mapTheme()
+
+```
+
+### 2.1.3 Import Features Data
+
+#### **2.1.3.1 Wild Urban Interface Data**
+
+The WUI data is collected from the [Calfire](https://frap.fire.ca.gov/mapping/gis-data/) website and reclassified in ArcGis. The wildland-urban interface (WUI) is the area where human development and natural landscapes intersect. This can include homes, businesses, and other structures that are located near or within wildland areas, such as forests or grasslands. The WUI is an important consideration in wildfire management because it is where the risk of wildfire is highest. The wildfires in these areas are likely to be caused by the presence of flammable vegetation, the location and design of buildings, and the presence of ignition sources such as cigarettes or BBQ grills.
+
+```{r message=FALSE,warning=FALSE}
+
+wui <- raster("data/wuireclass/wuireclass.tif")
+North_wui <- wui %>%
+crop(y = northcal %>% st_transform(crs(wui)))
+
+```
+
+#### **2.1.3.2 The Precipitation Data**
+
+The Precipitation data is collected from the US [PRISM Climate Group](https://prism.oregonstate.edu/recent/monthly.php). The precipitation might have both positive and negative impacts on wildfires, since drought due to low precipitation may increase wildfire risk, and vegetation growth due to high precipitation may also increase area's burning probability.
+
+We obtained three years precipitation data and took their average values for analysis.
+
+```{r message=FALSE,warning=FALSE}
+
+# 2021
+precip_21 <- raster('data/PRISM_ppt_stable_4kmM3_2021_bil/PRISM_ppt_stable_4kmM3_2021_bil.bil')
+precip2021 <- precip_21 %>%
+crop(y = netBorder %>% st_transform(crs(precip_21)))
+rm(precip_21)
+precip2021[is.na(precip2021)] <- 0
+precip2021 <- setMinMax(precip2021)
+
+# 2020
+precip_20 <- raster('data/PRISM_ppt_stable_4kmM3_2020_all_bil/PRISM_ppt_stable_4kmM3_2020_bil.bil')
+precip2020 <- precip_20 %>%
+crop(y = netBorder %>% st_transform(crs(precip_20)))
+rm(precip_20)
+precip2020[is.na(precip2020)] <- 0
+precip2020 <- setMinMax(precip2020)
+
+# 2019
+precip_19 <- raster('data/PRISM_ppt_stable_4kmM3_2019_bil/PRISM_ppt_stable_4kmM3_2019_bil.bil')
+precip2019 <- precip_19 %>%
+crop(y = netBorder %>% st_transform(crs(precip_19)))
+rm(precip_19)
+precip2019[is.na(precip2019)] <- 0
+precip2019 <- setMinMax(precip2019)
+
+
+```
+
+#### **2.1.3.3 The Temperature Data**
+
+The Temperature data is collected from the US [PRISM Climate Group](https://prism.oregonstate.edu/recent/monthly.php). We also obtained three years data and took their average values for analysis.
+
+```{r message=FALSE,warning=FALSE}
+temp_21 <- raster("data/temp2021/PRISM_tmean_stable_4kmM3_2021_bil.bil")
+temp21<-temp_21%>%
+crop(y = netBorder %>% st_transform(crs(temp_21)))
+temp21[is.na(temp21)] <- 0
+temp21 <- setMinMax(temp21)
+
+
+temp_20<- raster("data/temp2020/PRISM_tmean_stable_4kmM3_2020_bil.bil")
+temp20<-temp_20%>% 
+crop(y = netBorder %>% st_transform(crs(temp_20)))
+temp20[is.na(temp20)] <- 0
+temp20 <- setMinMax(temp20)
+
+temp_19 <- raster("data/temp2019/PRISM_tmean_stable_4kmM3_2019_bil.bil")
+temp19<-temp_19%>% 
+crop(y = netBorder %>% st_transform(crs(temp_19)))
+temp19[is.na(temp19)] <- 0
+temp19 <- setMinMax(temp19)
+
+temp<-cbind(temp21,temp20,temp19)
+```
+
+#### **2.1.3.4 The Landcover Data**
+
+The Landcover Data is acquired from [MRLC](https://www.mrlc.gov/data). The data is raster, and is reclassified according to [National Land Cover Database 2011 (NLCD2011) Legend](https://www.mrlc.gov/data/legends/national-land-cover-database-2011-nlcd2011-legend). The type of land might have significant influence on the probability of burning, because the data contains water, shrubs, woods and other land factors related to burning.
+
+```{r message=FALSE,warning=FALSE}
+
+landcover <- raster("data/nlcd_2019_land_cover_l48_20210604/nlcd_2019_land_cover_l48_20210604.img")
+North_landcover <- landcover %>% 
+crop(y=northcal %>% st_transform(crs(landcover)))
+rm(landcover)
+
+reclass_df <- c(0, 10, 0,
+                10, 11, 11, # open water
+                11, 12, 12, # perennial snow/ice
+                12, 20, 0,
+                20, 21, 21, # developed, open space
+                21, 22, 22, # developed, low intensity
+                22, 23, 23, # developed, med intensity
+                23, 24, 24, # developed, high intensity
+                24, 30, 0,
+                30, 31, 31, # barren
+                31, 40, 0,
+                40, 41, 41, # deciduous forest
+                41, 42, 42, # evergreen forest
+                42, 43, 43, # mixed forest
+                44, 51, 0,
+                51, 52, 52, # shrub/scrub
+                52, 70, 0,
+                70, 71, 71, # herbaceous
+                71, 80, 0, 
+                80, 81, 81, # hay/pasture
+                81, 82, 82, # cultivated crops
+                82, 89, 0,
+                89, 90, 90, # woody wetlands
+                90, 94, 0,
+                94, 95, 95, # emerging herbaceous wetlands
+                95, 255, 0)
+
+# reshape the object into a matrix with columns and rows
+reclass_m <- matrix(reclass_df,
+                ncol = 3,
+                byrow = TRUE)
+
+# perfrom the reclassification
+North_landcover <- reclassify(North_landcover, reclass_m)
+# set a min and max value for the raster
+North_landcover <- setMinMax(North_landcover)
+
+
+```
+
+#### **2.1.3.5 Elevation Data**
+
+The elevation data is acquired from the website. Elevation can be a factor in the occurrence and severity of wildfire. In general, higher elevations tend to have cooler temperatures, higher humidity, and less available fuel (e.g., vegetation) than lower elevations, which can reduce the likelihood of wildfire. However, the relationship between elevation and wildfire is complex and may vary depending on the specific characteristics of the region.
+
+```{r message=FALSE,warning=FALSE}
+
+a <- raster("data/USGS_1_n40w121_20200106.tif")
+b <- raster("data/USGS_1_n40w122_20210301.tif")
+c <- raster("data/USGS_1_n40w123_20210301.tif")
+d <- raster("data/USGS_1_n41w121_20191218.tif")
+e <- raster("data/USGS_1_n41w122_20220103.tif")
+f <- raster("data/USGS_1_n42w122_20210624.tif")
+g<-raster("data/USGS_1_n42w121_20190313.tif")
+
+# Elev <- as.list(a,b,c,d,e,f,g)
+# Elev$filename <- 'test.tif'
+# Elev$overwrite <- TRUE
+# cal_elev <- do.call("merge", Elev)
+# 
+# elevation <- cal_elev %>% 
+# crop(y = northcal %>% 
+# st_transform(crs(cal_elev)))
+# 
+# writeRaster (elevation, file ="f.tif")
+elevation <- raster("f.tif") 
+
+
+```
+
+## 2.2 Data Integration
+
+In this section, we joined the previously collected data to fishnet for subsequent machine learning model construction and regression analysis.
+
+### 2.2.1 Join Fire Data to Fishnet
+
+First, we joined the wildfire data for the three years 2019-2021 to the grid. It can be seen from the images that wildfires occur more frequently in the southwestern part of our study area.
+
+```{r message=FALSE,warning=FALSE}
+#join fire data to fishnet
+fire_net <-
+dplyr::select(North_fire) %>%
+mutate(countfires = 1) %>%
+aggregate(., fishnet, sum) %>%
+mutate(countfires = replace_na(countfires, 0),
+uniqueID = rownames(.),
+cvID = sample(round(nrow(fishnet) / 24),
+size=nrow(fishnet), replace = TRUE))
+
+ggplot() +
+geom_sf(data = fire_net, aes(fill = countfires)) +
+scale_fill_viridis(option="A") +labs(title = "Count of Fires by grid cell") +
+mapTheme()
+```
+
+Considering that we have to calculate the probability of wildfire afterwards, we have to calculate the burning area of each grid cell and the burning ratio to determine whether the unit cell is burned or not. The results of whether the area is burning or not are shown in the following figures.
+
+```{r message=FALSE,warning=FALSE}
+
+burncheck <- 
+  st_intersection(fishnet, North_fire %>% dplyr::select(CONT_DATE, UNIT,FIRE_NAME,SHAPE_Area) %>% st_transform(st_crs(fishnet)))
+
+burncheck$area<-as.numeric(st_area(burncheck$geometry))
+burncheck <- burncheck%>%
+  group_by(uniqueID) %>%
+  summarise(burn_ratio = sum(area)/62732387) 
+ggplot() +
+  geom_sf(data = fishnet, fill = "gray", color = "gray40") + 
+geom_sf(data = burncheck, aes(fill = burn_ratio))+
+scale_fill_viridis(option="A") +
+labs(title = "Burn Ratio by grid cell") +
+mapTheme()
+
+burncheck <- burncheck%>%
+  st_drop_geometry() %>%
+  dplyr::filter(burn_ratio > 0.7) %>%
+  mutate(burned = 1)
+
+fire_net <- fire_net %>% 
+left_join(., burncheck, by = "uniqueID")
+fire_net[is.na(fire_net)] <- 0
+#burned <- as.factor(fire_net$burned)
+
+ggplot() +
+geom_sf(data = fire_net, aes(fill = burned)) +scale_fill_viridis(option="A")+labs(title = "Burned Area") +
+mapTheme()
+
+```
+
+### 2.2.2 Join Feature Data to Fishnet
+
+Similarly, we added other feature data to fishnet so that all data used for subsequent regression analysis were in same geographic coordinate system. The landcover data and the WUI were joined to fishnet by classes, and the elevation, temperature and precipitation data were joined to fishnet by the mean value.
+
+```{r message=FALSE, warning=FALSE,echo=TRUE,results='hide'}
+#join the landcover data
+final_net <- cbind(fire_net, exact_extract(North_landcover, 
+fire_net %>% st_transform(crs(North_landcover)),'mode'))%>%
+rename(landcover=exact_extract.North_landcover..fire_net.....st_transform.crs.North_landcover....)
+
+final_net <- final_net %>%
+  mutate(landcovername = case_when(landcover == "11" ~ "openwater",
+                               landcover == "12" ~ "Perennial Ice/Snow",
+                               landcover == "21" ~ "Developed, Open Space",
+                               landcover== "22" ~ "Developed, Low Intensity",
+                               landcover == "23" ~ "Developed, Medium Intensity",
+                               landcover == "24" ~ "Developed High Intensity",
+                               landcover == "31" ~ "Barren Land",
+                               landcover == "41" ~ "Deciduous Forest",
+                               landcover == "42" ~ "Evergreen Forest",
+                               landcover == "43" ~ "Mixed Forest",
+                               landcover == "52" ~ "shrub",
+                               landcover == "71" ~ "Grassland/Herbaceous",
+                               landcover == "81" ~ "Pasture/Hay",
+                               landcover== "82" ~ "Crops",
+                               landcover == "90" ~ "Woody Wetlands",
+                               landcover== "95" ~ "Emergent Herbaceous Wetlands")) %>%
+  mutate(landcover = make.names(landcover)) %>%
+  mutate(landcover = as.factor(landcover))
+
+#join the elevation data
+final_net <- cbind(final_net, exact_extract(elevation, 
+                                        final_net %>% st_transform(crs(elevation)), 'mean'))%>%
+  rename(elevation=exact_extract.elevation..final_net.....st_transform.crs.elevation....)
+
+#join the wui data
+final_net <- cbind(final_net, exact_extract(North_wui, 
+                                        final_net %>% st_transform(crs(North_wui)), 'mode'))%>%
+  rename(wui=exact_extract.North_wui..final_net.....st_transform.crs.North_wui....)
+
+#join precipitation data
+final_net <- cbind(final_net, exact_extract(precip2019, 
+                                        final_net %>% st_transform(crs(precip2019)), 'max'))
+final_net <- cbind(final_net, exact_extract(precip2020, 
+                                        final_net %>% st_transform(crs(precip2020)), 'max'))
+final_net <- cbind(final_net, exact_extract(precip2021, 
+                                        final_net %>% st_transform(crs(precip2021)), 'max'))
+final_net <- final_net%>%
+  rename(precip2019=exact_extract.precip2019..final_net.....st_transform.crs.precip2019....)%>%
+  rename(precip2020=exact_extract.precip2020..final_net.....st_transform.crs.precip2020....)%>%
+  rename(precip2021=exact_extract.precip2021..final_net.....st_transform.crs.precip2021....)
+
+#join temperature data
+final_net <- cbind(final_net, exact_extract(temp19, 
+                                        final_net %>% st_transform(crs(temp19)), 'max'))
+final_net <- cbind(final_net, exact_extract(temp20, 
+                                        final_net %>% st_transform(crs(temp20)), 'max'))
+final_net <- cbind(final_net, exact_extract(temp21, 
+                                        final_net %>% st_transform(crs(temp21)), 'max'))
+final_net <- final_net%>%
+  rename(temp19=exact_extract.temp19..final_net.....st_transform.crs.temp19....)%>%
+  rename(temp20=exact_extract.temp20..final_net.....st_transform.crs.temp20....)%>%
+  rename(temp21=exact_extract.temp21..final_net.....st_transform.crs.temp21....)
+
+final_net[is.na(final_net)]<-0
+
+final_net<-final_net%>%
+mutate(burn_check=case_when(final_net$burned == "0" ~ "notburned",
+          final_net$burned == "1" ~ "burned"))
+
+```
+
+## 2.3 Data Analysis and Visalization
+
+### 2.3.1 Explore Landcover Data
+
+The landcover of northeast CA is shown below. From the results we can see that, as predicted, the areas burned are basically woods and shrubs, or more precisely, evergreen woods. Among all types, the highest burn ratio is for the evergreen forests.
+
+```{r message=FALSE, warning=FALSE}
+ggplot() +
+  geom_sf(data = final_net, aes(fill = landcovername), colour = NA) +
+  scale_fill_manual(values = c("openwater" = "#00b4d8",
+                               "Perennial Ice/Snow" = "#ffffff",
+                               "Developed, Open Space" = "#e8d1d1",
+                               "Developed, Low Intensity" = "#e29e8c",
+                               "Developed, Medium Intensity" = "#ff0000",
+                               "Developed High Intensity" = "#b50000",
+                               "Barren Land" = "#d2cdc0",
+                               "Deciduous Forest" = "#85c77e",
+                               "Evergreen Forest" = "#38814e",
+                               "Mixed Forest" = "#d4e7b0",
+                               "shrub" = "#dcca8f",
+                               "Grassland/Herbaceous" = "#fde9aa",
+                               "Pasture/Hay" = "#fbf65d",
+                               "Crops" = "#ca9146",
+                               "Woody Wetlands" = "#c8e6f8",
+                               "Emergent Herbaceous Wetlands" = "#64b3d5")) +
+  labs(title = "Land Cover in Northeastern CA") +
+  mapTheme()
+```
+
+```{r message=FALSE, warning=FALSE}
+final_net%>%
+  st_drop_geometry() %>%
+  dplyr::select(burn_check, landcovername) %>%
+  gather(Variable, value, -burn_check) %>%
+  count(Variable, value, burn_check) %>%
+  ggplot(aes(value, n, fill = burn_check)) +   
+    geom_bar(position = "dodge", stat="identity") +
+    facet_wrap(~Variable, scales="free") +
+    scale_fill_manual(values = c("#e6ccb2","#80b918")) +
+    labs(x="Burned", y="Count",
+         title = "Feature associations with the likelihood of burning",
+         subtitle = "Categorical features") +
+    plotTheme() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### 2.3.2 Explore WUI Data
+
+The distribution of WUI area is shown below. Comparing WUI areas with non-WUI areas, WUI areas did not bring more fires, indicating that WUI has little influence on wildfires in our study area.
+
+```{r}
+# 1-Not WUI 2-Influence Zone 3-Intermix 4-Interface
+final_net<-final_net%>%
+mutate(wui_name=case_when(wui=="0"~"not wui",
+                                                 wui=="1"~"not wui",
+                                                 wui=="2"~"influence zone",
+                                                 wui=="3"~"intermix",
+                                                 wui=="4"~"interface"))
+ggplot() +
+  geom_sf(data = final_net, aes(fill = wui_name), colour = NA) +
+  scale_fill_manual(values = c("not wui" = "#c8e6f8",
+                               "influence zone" = "#e29e8c",
+                               "intermix" = "#fbf65d",
+                               "interface" = "#b50000")) +
+  labs(title = "WUI area in Northeastern CA", subtitle = "Northeastern CA") +
+  mapTheme()
+```
+
+```{r}
+final_net%>%
+  st_drop_geometry() %>%
+  dplyr::select(burn_check, wui_name) %>%
+  gather(Variable, value, -burn_check) %>%
+  count(Variable, value, burn_check) %>%
+  ggplot(aes(value, n, fill = burn_check)) +   
+    geom_bar(position = "dodge", stat="identity") +
+    scale_fill_manual(values = c("#e6ccb2","#80b918")) +
+    labs(x="Burned", y="Count",
+         title = "The associations between the likelihood of burning and wui",
+         subtitle = "Northeastern CA") +
+    plotTheme() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### 2.3.3 Explore Elevation Data
+
+Our study area shows the characteristics of lower elevation in the southwest, and considering that most of the previously observed regional fires are concentrated in the southwest, we can further verify the correlation between the elevation and the fire perimeter.
+
+```{r message=FALSE, warning=FALSE}
+elev_plot <-
+  ggplot() +
+  geom_sf(data = final_net, aes(fill = elevation), colour = NA) +
+  scale_fill_viridis(option = "A") +
+  labs(subtitle = "Elevation") +
+  mapTheme()
+
+elev_plot
+```
+
+### 2.3.4 Explore Temperature Data
+
+In our assumptions, temperature also has a great influence on wildfire generation, and we made a temperature distribution map. We collected temperature data for three years, 2019, 2020 and 2021, and we can find some characteristics through the three temperature distribution maps. The temperature distribution of the two counties is basically the same during the three years, with one part in the south having a particularly high temperature, which is clearly different from most of the northern regions.
+
+```{r message=FALSE, warning=FALSE}
+temp_plot19<-
+  ggplot() +
+  geom_sf(data = final_net, aes(fill = temp19), colour = NA) +
+  scale_fill_viridis(option = 'H', direction = 1) +
+  labs(subtitle = "Temperature19") +
+  mapTheme()
+
+temp_plot20<-
+  ggplot() +
+  geom_sf(data = final_net, aes(fill = temp20), colour = NA) +
+  scale_fill_viridis(option = 'H', direction = 1) +
+  labs(subtitle = "Temperature20") +
+  mapTheme()
+temp_plot21<-
+  ggplot() +
+  geom_sf(data = final_net, aes(fill = temp21), colour = NA) +
+  scale_fill_viridis(option = 'H', direction = 1) +
+  labs(subtitle = "Temperature21") +
+  mapTheme()
+grid.arrange(temp_plot19, temp_plot20,temp_plot21, ncol = 3)
+```
+
+### 2.3.5 Explore Precipitation Data
+
+The distributions of precipitation and temperature are close, and the distribution of precipitation is almost the same over the three years. In the map we show, the darker the blue indicates more rain, and in the map, the precipitation is clearly high at the junction of the two counties, which we think is also related to the occurrence of wildfires in California.
+
+```{r message=FALSE, warning=FALSE}
+precip_plot19<-
+  ggplot() +
+  geom_sf(data = final_net, aes(fill = precip2019), colour = NA) +
+  scale_fill_viridis(option = 'mako', direction = -1) +
+  labs(subtitle = "precipitation,2019") +
+  mapTheme()
+
+precip_plot20<-
+  ggplot() +
+  geom_sf(data = final_net, aes(fill = precip2020), colour = NA) +
+  scale_fill_viridis(option = 'mako', direction = -1) +
+  labs(subtitle = "precipitation,2020") +
+  mapTheme()
+precip_plot21<-
+  ggplot() +
+  geom_sf(data = final_net, aes(fill = precip2021), colour = NA) +
+  scale_fill_viridis(option = 'mako', direction = -1) +
+  labs(subtitle = "precipitation,2021") +
+  mapTheme()
+grid.arrange(precip_plot19, precip_plot20,precip_plot21, ncol = 3)
+```
+
+### 2.3.6 The Relationship Between Burned Area and Elevation, Temperature, Precipitation(mean value)
+
+To more directly compare the connection between each geographic feature and burned land, we divided the data into burned and not burned groups separately, calculated the mean values of elevation, precipitation, and temperature in each of the two groups, and presented these means as histograms to compare the relationship between the features and burned land horizontally. In the below figures, precipitation seems to have a greater relationship with burning or not, as precipitation is much higher on burned land than on not burned land. Although this may sound strange, our investigation found that the weather in the burned areas of California is always unusual, with exceptionally high precipitation in some months and drought in others. We think there is a correlation between these significantly different weather conditions and wildfires. In addition, as we mentioned earlier, higher precipitation may result in more vegetation growth and a higher potential for wildfires.
+
+```{r message=FALSE, warning=FALSE}
+final_net <-final_net%>%
+  mutate(precip=(precip2019+precip2020+precip2021)/3)%>%
+  mutate(temp=(temp19+temp20+temp21)/3)
+
+final_net %>%
+  st_drop_geometry() %>%
+  dplyr::select(burn_check, precip, elevation,temp) %>%
+  gather(Variable, value, -burn_check) %>%
+  ggplot(aes(burn_check, value, fill=burn_check)) + 
+    geom_bar(position = "dodge", stat = "summary", fun = "mean") + 
+    facet_wrap(~Variable, scales = "free") +
+   scale_fill_manual(values = c("#e6ccb2","#80b918")) +
+    labs(x="Burned", y="Mean") +
+    plotTheme() + theme(legend.position = "none")
+
+```
+
+# 3. Construction of Model
+
+## 3.1 Construct Regression Model
+
+The data was split into a 75% training set and a 25% test set, and the data from the training set was brought into the model for training to derive the contribution of each predictor variable to the model and the model metrics. For landcover, the correlation between the various feature coverage features and burning does not seem to be very strong, this is because the distribution of the features on the map is very scattered. correlation. Nevertheless, these features are still meaningful, so we keep them.
+
+```{r message=FALSE, warning=FALSE}
+
+set.seed(3456)
+
+# 2019 through 2021 model
+trainIndex <- createDataPartition(y = paste(final_net$burned, final_net$landcovername,final_net$wui), 
+                                  p = .75,
+                                  list = FALSE,
+                                  times = 1)
+burnTrain <- final_net[ trainIndex,]
+burnTest <- final_net[-trainIndex,]
+
+#model
+reg <- glm(burned ~ .,
+            data = as.data.frame(burnTrain) %>% 
+              dplyr::select(burned, landcovername, precip, elevation,temp,wui),
+            family="binomial"(link="logit"))
+
+
+
+stargazer(reg, 
+          type = "text",
+            digits = 1,
+           title = "Model summary of the Baseline models",
+          dep.var.labels = "Home Price")
+```
+
+## 3.2 Goodness of Fit
+
+### 3.2.1 The "McFadden R-Squared"
+
+The first step is to identify the prediction results with the simplest R-square. Although there is no actual R-square available in the prediction result of the logistic model, because it is not linearly distributed from zero to one, it is a binary result. But we can still use the pR2() function for the quickest accuracy check, which will have the 'McFadden R-Squared' to approximate the R-square function, the higher the value the better. Daniel McFadden, the creator of the metric, specified 0.2 - 0.4 as the "good" fit range.
+
+```{r message=FALSE, warning=FALSE}
+
+pR2(reg)
+
+```
+
+### 3.2.2 Calculate The Probability of Correct Prediction
+
+There is another way to present the results of the model. We derive the results of the model and then predict the probability of being correct in the results. Create a data frame of the test set results, which contains the probability of each cell and also the true value of each cell.
+
+```{r message=FALSE, warning=FALSE}
+
+testProbs = data.frame(Outcome = as.factor(burnTest$burned),
+                        Probs = predict(reg, burnTest, type= "response"))
+head(testProbs)
+```
+
+#### 3.2.2.1 Mean Value of Predicted Probability
+
+We calculate that the mean of the probability of no flame in the predicted results is 0.136, while the mean of the probability that a flame will be produced is 0.396.
+
+```{r}
+# Histograms fire
+testProbsFire <- testProbs %>% filter (Outcome=="1")
+testProbsNoFire <- testProbs %>% filter (Outcome=="0")
+mean(testProbsNoFire$Probs)
+mean(testProbsFire$Probs)
+```
+
+#### 3.2.2.2 Histogram of Predicted Probabilities
+
+We take the predicted values of the two cases to do a certain degree of statistics and show them on the histogram. The green one is the data of predicting that there are flames in the cell, and it can be seen that the highest histogram is between 0.2-0.3; the pink graph is the probability of predicting that there are no flames in the cell, and the highest probability position is between 0-0.1. And it can be seen that the green histogram is less than the pink one, saying that the predicted results are a little less predicted to have a flame.
+
+```{r}
+
+hist(testProbsFire$Probs, 
+     col="#80b918",
+       main="Predicted Probabilities for Grid Cells with Fire",
+     xlab="Probability")
+
+# Histograms nofire
+hist(testProbsNoFire$Probs, 
+     col="#e6ccb2",
+       main="Predicted Probabilities for Grid Cells with No Fire",
+     xlab="Probability")
+
+
+```
+
+#### 3.2.2.3 Distribution of Predicted Probabilities
+
+We can compare the result with the histogram above, in fact the distribution is the same. The green areas are more even, and the pink is more concentrated in the smaller probabilities. For the part with observation 0 (no burning), the pink "hump" is in the part with very small probability and mostly concentrated in this position, indicating that, to a large extent, the probability of predicting burning in the cell with no burning is very small; correspondingly, for the part with observation 1 (burning), the green "hump" is closer to the 0.25 position. The green "bump" position is closer to the 0.25 position, which is significantly larger than the pink position, indicating that the probability of predicting combustion in the cell with the observed value of combustion is larger.
+
+```{r message=FALSE, warning=FALSE}
+  ggplot(testProbs, aes(x = Probs, fill = as.factor(Outcome))) + 
+    geom_density() +
+    facet_grid(Outcome ~ .) +
+    scale_fill_manual(values = palette2) + xlim(0, 1) +
+    geom_vline(xintercept = .17) +
+    labs(x = "Burned", y = "Density of probabilities",
+         title = "Distribution of predicted probabilities by observed Outcome",
+         subtitle = "Likelihood of Wildfire, 2019-2021") +
+    plotTheme() + 
+    theme(strip.text.x = element_text(size = 18),
+          legend.position = "none")
+        
+```
+
+# 4.Model Validation
+
+After that, we have to evaluate and validate the model we made, and explore the meaning of the model results and some metrics. In this part I divided into two types of validation, one of them is k-fold cross validation and the second one is spatial cross validation. Both types of validation have their values.
+
+## 4.1 Estimation Threshold
+
+By observing the above distribution, the optimal interval of human eye prediction is around 0.17. This threshold is to distinguish the prediction probability, when the prediction probability is greater than this threshold we determine that the prediction result will burn, and less than this prediction probability we determine that the prediction result will not burn.
+
+```{r message=FALSE, warning=FALSE}
+testProbs <- testProbs %>%
+  mutate(predOutcome  = as.factor(ifelse(testProbs$Probs > 0.17 , 1, 0)))
+```
+
+## 4.2 Confusion Matrix
+
+Confusion Matrix is raised. In this matrix, we can see the comparison between the predicted results of various possibilities in the test set and the real results. The four possibilities are true positive, true negative, false positive and false negative.we could see that the number of true negative results was the largest, which was also consistent with the result of the figure named "Distribution of predicted by observed outcome".
+
+```{r message=FALSE, warning=FALSE}
+caret::confusionMatrix(testProbs$predOutcome, testProbs$Outcome, 
+                       positive = "1")
+
+```
+
+We show the size of the four indicators in a more visual way, with the largest being the darkest in color，true negative\>false positive\>true positive\>false negative.
+
+```{r message=FALSE, warning=FALSE}
+cm <- conf_mat(testProbs, Outcome, predOutcome)
+autoplot(cm, type = "heatmap") +
+  scale_fill_gradient(high="#2E8B57",low = "#98FB98") +
+  labs(title = "Confusion Matrix")
+```
+
+## 4.3 ROC Curve.
+
+The ROC curve is generated to observe the fitness of our prediction results in the form of a graph. The orange curve is the model result, the y-coordinate is the probability of true positive, the X-coordinate is the probability of false positive, and the area under the curve represents the probability that the model is correct.This gives a goodness of fit measure, 1 would be a perfect fit, 0.5 is a coin toss. The area under our curve is slightly above the ideal range of 0.65-0.85, but it is not overly concerning and indicative of overfitting the model.
+
+```{r message=FALSE, warning=FALSE}
+auc(testProbs$Outcome, testProbs$Probs)
+```
+
+```{r message=FALSE, warning=FALSE}
+
+ggplot(testProbs, aes(d = as.numeric(testProbs$Outcome), m = Probs)) +
+  geom_roc(n.cuts = 50, labels = FALSE, colour = "#FE9900") +
+  style_roc(theme = theme_grey) +
+  geom_abline(slope = 1, intercept = 0, size = 1.5, color = 'grey') +
+  labs(title = "ROC Curve")
+
+```
+
+## 4.4 K-fold Cross Validation
+
+Below is the result of the cross-validation of the model, with the model folded 100 times. Cross-validation is the process of repeatedly bringing data into the model and calculating it to arrive at the closest true value. This includes the ROC curve area, sensitivity and specificity. These 100 calculations are computer-generated random subgroups, and the results obtained in these combinations can't be used as a basis in isolation, but the final combined results can be used as a measure of how well the model generalizes in the random case.
+
+```{r message=FALSE, warning=FALSE,echo=TRUE,results='hide'}
+ctrl <- trainControl(method = "cv", number = 100, classProbs=TRUE,savePredictions = "all", summaryFunction=twoClassSummary)
+
+cvFit <- train(burn_check ~ ., data = st_drop_geometry(final_net) %>% na.omit() %>%
+                                   dplyr::select(
+                                     burn_check,
+                                     elevation,
+                                     precip,
+                                     landcovername,
+                                     temp,
+                                     wui), 
+                method="glm", family="binomial",
+                metric="ROC", trControl = ctrl)
+
+cvFit
+```
+
+The average sensitivity of the model decreases significantly while the specificity increases, the area under the ROC curve remains unchanged. The figure below shows the results of the cross validation with the distribution of the ROC curve area results, the sensitivity distribution and the specificity distribution. Through the validation we will find that we are not able to get a higher true positive indicator, this is due to the data characteristics, some times wildfires in California are not only related to weather conditions and natural phenomena, so our prediction model does not contain all the variables needed to predict wildfire production. In addition, we know that wildfires are not common occurrences, and California wildfire statistics do not count small burns in the data, so the number of fires is not sufficient to support the computation of large prediction variables. However, the prediction results of this model are still of use, which will be stated later in the cost analysis.
+
+```{r message=FALSE, warning=FALSE}
+cvFit
+dplyr::select(cvFit$resample, -Resample) %>%
+  gather(metric, value) %>%
+  left_join(gather(cvFit$results[2:4], metric, mean)) %>%
+  ggplot(aes(value)) + 
+  geom_histogram(bins=35, fill = "#80b918") +
+  facet_wrap(~metric) +
+  geom_vline(aes(xintercept = mean), colour = "#FE9900", linetype = 3, size = 1.5) +
+  scale_x_continuous(limits = c(0, 1)) +
+  labs(x="Goodness of Fit", y="Count", title="CV Goodness of Fit Metrics",
+       subtitle = "Across-fold mean represented as dotted lines") +
+  plotTheme()
+```
+
+## 4.5 Spatial-Cross Validation Function
+
+Spatial validation is done based on the previous k-fold cross validation by adding the geographic characteristics of the cell, taking the neighborhood where the observation point is located as the unit of calculation, and using the spatial characteristics as an important basis for validating the model, so that the results are more consistent with events with obvious geographic location and prominent spatial characteristics. The prediction of the California fires is precisely a geographic prediction event, so we choose to use spatial validation in the calculation.
+
+```{r Validation, message=FALSE, warning=FALSE,echo=TRUE,results='hide'}
+
+crossValidate <- function(dataset,id,dependentVariable, indVariables) {
+  
+  allPredictions <- data.frame()
+  cvID_list <-unique(dataset[[id]])
+  
+  for (i in cvID_list) {
+    
+    thisFold <- i
+    cat("This hold out fold is", thisFold, "\n")
+    
+    fold.train <- filter(dataset, dataset[[id]]!= thisFold) %>% as.data.frame() %>% 
+      dplyr::select(id, geometry, indVariables, dependentVariable)
+    fold.test  <- filter(dataset, dataset[[id]] == thisFold) %>% as.data.frame() %>% 
+      dplyr::select(id, geometry, indVariables, dependentVariable)
+    
+    regression <-
+      glm(burned ~ ., family = "binomial", 
+          data = fold.train %>% 
+            dplyr::select(-geometry, -id))
+    
+    thisPrediction <- 
+      mutate(fold.test, Prediction = predict(regression, fold.test, type = "response"))
+    
+    allPredictions <-
+      rbind(allPredictions, thisPrediction)
+    
+  }
+  return(st_sf(allPredictions))
+}
+```
+
+Next is the comparison map of spatial validation results and observation results. The following map shows our results after spatial validation. The red outline is our observation results, and the lighter blue part is the predicted location with higher probability of fire initiation.
+
+```{r  message=FALSE, warning=FALSE,echo=TRUE,results='hide'}
+reg.vars <- c("landcovername", "elevation", "wui", "precip", "temp")
+
+reg.spatialCV <- crossValidate(
+  dataset = final_net,
+  id = "cvID",
+  dependentVariable = "burned",
+  indVariables = reg.vars) 
+
+reg.spatialcv <-
+  reg.spatialCV %>%
+  dplyr::select("cvID" = cvID, burned, Prediction, geometry)
+
+
+ggplot() +
+  geom_sf(data = reg.spatialcv, aes(fill = Prediction), color = "transparent")+
+  geom_sf(data = North_fire, fill = "transparent", color = "#FF6347", size=.5)+
+  labs(title="Predicted Probabilities and Actual Fires",
+       subtitle="Pink outline marks perimeter of actual fires")+
+  mapTheme()
+```
+
+Below is the map of the predicted event probability distribution after spatial validation.
+
+```{r map, echo=FALSE, message=FALSE, warning=FALSE, cache=TRUE, results=FALSE}
+
+testProbs_all <- data.frame(Outcome = as.factor(final_net$burn_check),
+                        Probs = predict(reg, final_net, type= "response"),
+                        uniqueID= final_net$uniqueID)
+
+testProbs_all <- testProbs_all %>% mutate(Risk_Cat=
+                                            case_when(Probs <=.03 ~ "Low",
+                                                   Probs > 0.03 & Probs < .2 ~ "Medium",
+                                                   Probs >=.2 ~ "High" ))
+
+
+
+fishnet_clipped_probs <- left_join(final_net, testProbs_all, on = "uniqueID")
+
+palette3 <- c("#8B3626","#FFA07A","#FF6347")
+
+ggplot() +
+  geom_sf(data=fishnet_clipped_probs, aes(fill=Risk_Cat), color="transparent")+
+  scale_fill_manual(values=palette3, name="Risk Score") +
+  labs(title="Predicted Risk Scores Across 2 Northern California Counties")+
+  mapTheme()
+
+```
+
+# 5. Generating Costs and Benefits
+
+## 5.1 Make The Costs and Benefits Table
+
+Based on the information found and the annual California wildfire reports, an average of 8,000 fires are generated each year, with an average annual loss of \$16 billion and nearly \$3 billion in investment and prevention resources. We summarize the calculation of losses and benefits for this projection. We have determined that without any human involvement, the loss per fire is around \$5 million, and when prevention is involved and nearly \$0.3 million in resources are invested, the fire will burn less extensively and the loss will be reduced, by about 60%, while the timely containment and proper placement of fire prevention resources will generate a gain of nearly \$2.9 million in revenue later on, which includes The sustainable conservation of biological resources and human and residential property, and the rapid prevention of subsequent fires. The State of California has established relevant forestry and fire protection commissions, enacted the California Forest Practices Act to ensure the sustainability of natural resources, and provided public research and educational outreach to achieve fire response initiatives. There are specific initiatives to prevent wildfires, such as reducing the construction of persistent houses and other structures in areas where wildfires are common, ensuring that there are no dangerous trees in areas where wildfires are common (e.g., eucalyptus, dense brush which are high in oil), and sometimes flames can take away flammable vegetation, which can actually be beneficial in preventing flames. Reducing fires caused by man-made sources, according to statistics nearly 90% of fires are caused by human factors, requires investment in the relevant departments to strengthen forest patrols, strengthen people's awareness of fire prevention, and reduce the incidence of smoking, rituals, and agricultural fires during periods of heat and drought.
+
+Next we list the analytical equations for different scenarios based on the basic costs and benefits.
+
+**True_Positive (a wildfire is predicted to occur at a site, the government has invested more money in implementing preventive measures, and in reality it does occur)** = (2.5 \* Count) - (5 \* Count \* .4) - (0.3 \* Count);
+
+**True_Negative (predicting that a wildfire will not occur at a site, the government did not invest more money in implementing preventive measures, when in reality it did not)** = 0 \* Count;
+
+**False_Positive (predicts that a wildfire will occur at a location, invested more money in implementing preventive measures, but it does not)** = (-0.3) \* Count;
+
+**False_Negative (predicted that a wildfire would not occur at a location, the government did not invest more money in implementing preventive measures, yet it actually did and cost great loss)** = (-5) \* Count.
+
+```{r message=FALSE, warning=FALSE }
+cost_benefit_table <-
+   testProbs %>%
+      count(predOutcome, Outcome) %>%
+      summarize(
+        True_Positive = sum(n[predOutcome==1 & Outcome==1]),
+        True_Negative = sum(n[predOutcome==0 & Outcome==0]),
+        False_Positive = sum(n[predOutcome==1 & Outcome==0]),
+        False_Negative = sum(n[predOutcome==0 & Outcome==1])) %>%
+      gather(Variable, Count) %>%
+       mutate(Revenue =
+               case_when(
+                 Variable == "True_Positive"  ~ ((2.5*Count)-(5* Count * .4) - (0.3 * Count)),
+                 Variable == "True_Negative"  ~ (0 * Count),
+                 Variable == "False_Positive" ~ ((-0.3) * Count),
+                 Variable == "False_Negative" ~ ((-5) * Count))) %>%
+    bind_cols(
+      data.frame(
+        Description = c(
+              "Predicted correctly that a cell would burn. Resources allocated for mitigation, which halved the extent of the fire, and reduced the impact to life and property",
+              "Predicted correctly that a cell would not burn, no action taken, resources saved",
+              "Predicted that an area would burn, but it did not, resulting in some habitat loss and resource expense", 
+              "Predicted incorrectly that a cell would not burn, but it did, resulting in heavy costs to life and property"
+              )
+        )
+      ) 
+
+kable(cost_benefit_table,
+       caption = "Cost/Benefit Table of Wildfire in North Region of California") %>% 
+  kable_styling()
+```
+
+## 5.2 Find The Best Threshold
+
+Here we constructed the function in which the cost/benefit cases under different thresholds are calculated one by one in 0.1 units.
+
+```{r}
+iterateThresholds = function(data) {
+  x = .01
+  all_prediction = data.frame()
+  while (x <= 1) {
+  
+  this_prediction =
+      data %>%
+      mutate(predOutcome = ifelse(Probs > x, 1, 0)) %>%
+      count(predOutcome, Outcome) %>%
+      summarize(True_Negative = sum(n[predOutcome==0 & Outcome==0]),
+                True_Positive = sum(n[predOutcome==1 & Outcome==1]),
+                False_Negative = sum(n[predOutcome==0 & Outcome==1]),
+                False_Positive = sum(n[predOutcome==1 & Outcome==0])) %>%
+     gather(Variable, Count) %>%
+     mutate(cost_benefit =
+               ifelse(Variable == "True_Positive", ((2.5*Count)-(5* Count * .4) - (0.3 * Count)),
+                      ifelse(Variable == "True_Negative", (0 * Count),
+                             ifelse(Variable == "False_Positive",((-0.3) * Count),
+                                    ((-5) * Count)
+                                    )
+                             )
+                      ),
+            Threshold = x)
+  
+  all_prediction = rbind(all_prediction, this_prediction)
+  x = x + .01
+  }
+return(all_prediction)
+}
+
+
+whichThreshold <- iterateThresholds(testProbs)
+
+```
+
+Next, we displayed the cost/benefit distribution for various scenarios with different thresholds, and the relationship between the threshold and loss values is visualized. Displaying each threshold value with its corresponding loss value in the graph, it can be seen that there is a minimum point between 0 and 0.125, which corresponds to exactly the optimal value with which we want to work, and it corresponds to the loss value that is the minimum level of loss we can achieve in the event of a wildfire. When the threshold is greater than about 0.8, the loss is almost at its maximum, which is the case when false positive occurs to do more.
+
+```{r}
+whichThreshold %>%
+  ggplot(.,aes(Threshold, cost_benefit, colour = Variable)) +
+  geom_point() +
+  scale_colour_manual(values = c("#48D1CC","#3CB371","#f2cc8f","#FFD700")) +    
+  labs(title = "Loss/Benefit by confusion matrix type and threshold",
+       y = "Loss/Benefit") +
+  plotTheme() +
+  guides(colour=guide_legend(title = "Confusion Matrix")) 
+
+```
+
+```{r}
+
+whichThreshold_benefit <- 
+  whichThreshold %>% 
+  group_by(Threshold) %>%
+mutate(loss=sum(cost_benefit))%>%
+dplyr::select(Threshold,loss)
+  whichThreshold_benefit <- whichThreshold_benefit[!duplicated(whichThreshold_benefit$Threshold),]
+  
+  whichThreshold_benefit %>%
+ ggplot(aes(Threshold,loss)) +
+    geom_point() +
+    geom_vline(xintercept = pull(arrange(whichThreshold_benefit, -loss)[1,1])) +
+    scale_colour_manual(values = palette2) +
+  ylim(-100,-1500) +
+    labs(title = "Wildfire Damage by threshold",
+         subtitle = "All calculation results are negative numbers,the lowest point has the best threshold.")
+  
+  
+```
+
+The optimal threshold is displayed, which corresponds to the threshold corresponding to the vertical line in the figure above. The optimal threshold is 0.11.
+
+```{r}
+pull(arrange(whichThreshold_benefit, -loss)[1,1])
+```
+
+## 5.3 Comparison
+
+The previous visual estimation threshold of 0.17 is compared with the final computed optimal threshold of 0.11. Listing the table, in terms of the degree of loss, the loss is only 156.8 for the 0.11 threshold case, but 212.8 for the 0.17 threshold.
+
+```{r}
+
+whichThreshold_benefit %>%
+  filter(Threshold == "0.17" | Threshold == "0.11") %>%
+  mutate(contrast = case_when(Threshold == "0.17" ~ "Visual estimation", Threshold == "0.11" ~ "Optimal choice")) %>%
+  dplyr::select(contrast, loss) %>%
+ kable() %>%
+    kable_styling("striped", full_width = F) %>%
+    row_spec(1, color = "black", background = "#90EE90") 
+```
+
+## 5.4 The New Confusion Matrix
+
+After choosing 0.11 as the new threshold, it is again brought into the function to obtain the confusion matrix. We can see that compared to the previous threshold of 0.17, the result we expect is to some extent improved, but the rest of the values are also sacrificed, which is unavoidable, but in the case of trade-offs and cost/benefit analysis, this sacrifice is beneficial.
+
+```{r}
+testProbs <- testProbs %>%
+  mutate(predOutcome_opt  = as.factor(ifelse(testProbs$Probs > 0.11 , 1, 0)))
+
+caret::confusionMatrix(testProbs$predOutcome_opt, testProbs$Outcome, 
+                       positive = "1")
+
+```
+
+In the 100-folds cross validation of the whole data, blow is the sensitivity and specificity at a threshold of 0.11. The final results are presented in the form of a table.
+
+```{r}
+thresholder(cvFit, 0.11, final = TRUE) %>%
+  dplyr::select(prob_threshold, Sensitivity, Specificity) %>%
+   kable() %>%
+    kable_styling("striped", full_width = F) %>%
+    row_spec(1, color = "black", background = "#90EE90") 
+```
+
+# 6. Final Forecast Results
+
+## 6.1 Map of The Probability of Occurrence
+
+The probability of burning for each cell is obtained by substituting all data into the regression model and generating the probability map. The high probability indicates the highest probability to burn.
+
+```{r}
+
+final_net <- final_net %>%
+  mutate(Probs = predict(reg, final_net, type= "response"))
+final_net$predOutcome = as.factor(ifelse(final_net$Probs > 0.11 , "burned", "notburned"))
+
+final_net <- final_net %>%
+  mutate(accuracy=case_when(burned==1&predOutcome=="burned"~"fire/predict with fire",
+                            burned==1&predOutcome=="notburned"~"fire/predict no fire",
+                            burned==0&predOutcome=="burned"~"no fire/predict with fire",
+                            burned==0&predOutcome=="notburned"~"no fire/predict no fire",
+                            TRUE ~ "fail"))
+
+
+
+ggplot() +
+  geom_sf(data = final_net, aes(fill = Probs), colour = NA) +
+  scale_fill_viridis(option = 'E', direction = -1) +
+  labs(title = "Wildfire Risk Probabilities") +
+  mapTheme()
+
+```
+
+## 6.2 Final Maps for The Four Cases
+
+The probability of 0.11 is considered as the optimal threshold value for judging whether a fire will start or not, and a cell with a predicted probability greater than 0.11 is determined to be burned area. The result of this determination is displayed in the map. We use four colors to represent each of the four probabilities on the map. We find that the range where there is actually a fire but predicted no fire (blue) is small, and the range where there is actually a fire predicted to result in the same fire basically matches what was observed before.
+
+```{r}
+
+ggplot() +
+  geom_sf(data = final_net, aes(fill = accuracy), colour = NA) +
+  scale_fill_manual(values = c("fire/predict with fire" = "#9370DB","fire/predict no fire" = "#20B2AA","no fire/predict with fire" = "#DAA520","no fire/predict no fire" = "#FFDAB9")) +
+ # geom_sf(data = North_fire, fill = "transparent", color = "#FF6347", size=.7)+
+  labs(title = "Wildfire Risk Predictions, 11% Outcome Threshold") +
+  mapTheme()
+```
+
+# 7. Application
+
+It is the prototype of our FireShield application, it contains mainly two types of information: past wildfires and the possibility of future occurrences. On the left side of the page there is a sidebar for retrieving data, where users can filter the information they want to check by location, year and cause of the wildfire, and they can also enter their own location. Filtered historical wildfires are displayed as lines in the map, and when the user clicks on an event, the wildfire is highlighted and the box containing the wildfire's information pops up on the right. The bottom layer also shows the probability that wildfires will occur in the area in the future, which can help the residents and governments prepare in advance. In addition to the features we present, an alarm system and fire prevention tips may be added later.
+
+![](C:/UPENN%20CLASS/MUSA%205080/assginments/final%20project%20wildfire/wildfire/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20221216162924.png)
+
+The app is very flexible and can be used both on the web and on mobile, allowing users to easily access the information they want to check at any time. It is a valuable tool for helping people stay safe and informed during wildfire season, and for helping emergency responders and authorities plan and prepare for potential fires.
+
+![](C:/UPENN%20CLASS/MUSA%205080/assginments/final%20project%20wildfire/wildfire/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20221216162914.png)
+
+# 8. Conclusion
+
+In general, our model is very applicable in predicting where wildfires have high possibilities to happen, although it also has some shortcomings that it will have higher false positive rates in predicton, which means it will predict more fires than actual. There are also some other limitations of our model and some more works needed to be down to improve the accuracy and generalization.
+
+First, the study boundary of our model is limited to two counties in northeastern California, and the predictive power of the model would be improved if the boundary could be extended to the whole California. This is because when the research region is expanded, the land types associated with wildfires will be more abundant, and the climate and elevation differences among spaces will be more significant. The diversity of features will help us predict wildfires in different regions more accurately. However, from the prediction results of our region, our algorithm can be proved to be successful.
+
+In addition, our model only focuses on the spatial -scale of fire occurrence and does not consider time-scale. In fact, the occurrence of wildfires and the time of the year have strong correlation, for example, California has a high incidence of wildfires during the summer when there is little rain and high temperatures, and historical events show that wildfires tend to be concentrated in the summer. Therefore, if we can further filter the data by time of year (such as climate, which changes over time), and increase the time scale to look at the relationship between temperature as well as precipitation changes and wildfires from long-term data, the results may be more accurate.
